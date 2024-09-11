@@ -1,0 +1,143 @@
+# Instalar a biblioteca stripe e python-telegram-bot se necessário (para notebooks como Colab ou Jupyter)
+!pip install stripe
+!pip install python-telegram-bot
+
+import nest_asyncio
+import asyncio
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode  # Atualizado
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import stripe
+import random
+
+# Permitir que o loop de eventos existente funcione em Colab
+nest_asyncio.apply()
+
+# Links diretos para os produtos no Stripe
+links_stripe = {
+    '3_cartas': 'https://buy.stripe.com/4gw5le7Osa9i7IcdQQ',  # R$ 19,90
+    '6_cartas': 'https://buy.stripe.com/9AQ5lec4Idlu7IcfYZ',  # R$ 24,90
+    '3_perguntas_oraculo': 'https://buy.stripe.com/9AQ6pic4Ia9iaUofZ3',  # R$ 29,90
+    '12_cartas': 'https://buy.stripe.com/cN26piecQ4OYd2w7su',  # R$ 34,90
+    'tarot_amor_completo': 'https://buy.stripe.com/aEU9Bu4Cg6X66E828c',  # R$ 49,90
+    '21_cartas': 'https://buy.stripe.com/4gw292gkY81ae6A7sv',  # R$ 49,90
+    '10_perguntas_oraculo': 'https://buy.stripe.com/7sIaFy2u82GQ5A49AG',  # R$ 59,90
+}
+
+# Cupom de desconto válido
+VALID_COUPON = 'PROMO50'
+
+# Variável global para armazenar o cupom temporariamente
+temp_coupon = {}
+
+# Definindo o baralho de tarot com as cartas adicionadas
+tarot_deck = {
+    'O Louco': '🌟 O começo de uma jornada, aventura e espontaneidade.',
+    'O Mago': '🧙 Habilidade, poder e a capacidade de manifestar desejos.',
+    'A Sacerdotisa': '🔮 Intuição, mistério e sabedoria secreta.',
+    'A Imperatriz': '🌼 Fertilidade, abundância e criatividade.',
+    'O Imperador': '👑 Autoridade, estrutura e controle.',
+    'O Papa': '📜 Tradição, conformidade e moralidade.',
+    'Os Enamorados': '💑 Amor, união e escolhas.',
+    'O Carro': '🚗 Determinação, sucesso e controle.',
+    'A Justiça': '⚖️ Equilíbrio, justiça e responsabilidade.',
+    'O Eremita': '🔦 Reflexão, introspecção e sabedoria interior.',
+    'A Roda da Fortuna': '🎡 Mudança, sorte e ciclos.',
+    'A Força': '🦁 Coragem, controle e compaixão.',
+    'O Enforcado': '🔄 Sacrifício, novas perspectivas e rendição.',
+    'A Morte': '☠️ Transformação, fim de ciclos e novos começos.',
+    'A Temperança': '⚗️ Equilíbrio, moderação e paciência.',
+    'O Diabo': '😈 Tentação, materialismo e excessos.',
+    'A Torre': '⚡ Mudança súbita, crise e revelações.',
+    'A Estrela': '✨ Esperança, inspiração e serenidade.',
+    'A Lua': '🌙 Ilusões, medo e intuição.',
+    'O Sol': '☀️ Felicidade, sucesso e vitalidade.',
+    'O Julgamento': '🎺 Renovação, decisão e despertar.',
+    'O Mundo': '🌍 Conclusão, realização e integração.'
+}
+
+# Função para escolher cartas aleatórias do deck
+def choose_cards(deck, num_cards=3):
+    return random.sample(list(deck.keys()), num_cards)
+
+# Função para interpretar as cartas escolhidas
+def interpret_cards(selected_cards, deck):
+    interpretation = "<b>🔮 Sua leitura personalizada:</b>\n\n"
+    for card in selected_cards:
+        interpretation += f"<b>{card}:</b> {deck[card]}\n\n"
+    return interpretation
+
+# Função para iniciar o processo de assinatura
+async def start_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+
+    # Pergunta ao usuário se possui um cupom de desconto
+    await context.bot.send_message(chat_id=chat_id, text="Você possui um cupom de desconto? Se sim, envie o código agora, ou digite 'Não' para continuar sem cupom.")
+    context.user_data['awaiting_coupon'] = True
+
+# Função para processar a entrada de um código de cupom ou "Não"
+async def process_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    user_input = update.message.text.strip()
+
+    if context.user_data.get('awaiting_coupon'):
+        if user_input.lower() != "não":
+            if user_input.upper() == VALID_COUPON:
+                temp_coupon[chat_id] = VALID_COUPON
+                await context.bot.send_message(chat_id=chat_id, text="Cupom 'PROMO50' aplicado! Escolha seu produto.")
+            else:
+                await context.bot.send_message(chat_id=chat_id, text="Cupom inválido. Continuando sem cupom.")
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="Continuando sem cupom.")
+
+        # Limpa o estado de espera do cupom
+        context.user_data['awaiting_coupon'] = False
+
+        # Envia uma mensagem perguntando qual produto o usuário deseja escolher
+        keyboard = [
+            [InlineKeyboardButton("3 cartas - R$19,90", callback_data='3_cartas')],
+            [InlineKeyboardButton("6 cartas - R$24,90", callback_data='6_cartas')],
+            [InlineKeyboardButton("3 Perguntas ao Oráculo - R$29,90", callback_data='3_perguntas_oraculo')],
+            [InlineKeyboardButton("12 cartas - R$34,90", callback_data='12_cartas')],
+            [InlineKeyboardButton("Tarot do Amor Completo - R$49,90", callback_data='tarot_amor_completo')],
+            [InlineKeyboardButton("21 cartas - R$49,90", callback_data='21_cartas')],
+            [InlineKeyboardButton("10 Perguntas ao Oráculo - R$59,90", callback_data='10_perguntas_oraculo')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await context.bot.send_message(chat_id=chat_id, text="Escolha seu produto:", reply_markup=reply_markup)
+
+# Função para processar a escolha do plano e redirecionar para o pagamento no Stripe
+async def process_plan_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    plan = query.data  # Aqui a variável 'plan' recebe o valor
+
+    # Obter o link correspondente ao plano escolhido
+    checkout_url = links_stripe.get(plan)
+
+    # Verificar se o plano foi encontrado
+    if checkout_url:
+        # Enviar a URL de pagamento para o usuário
+        await query.answer()
+        await query.edit_message_text(f"Por favor, siga este link para concluir seu pagamento: {checkout_url}")
+    else:
+        await query.answer()
+        await query.edit_message_text("Desculpe, ocorreu um erro ao processar sua solicitação.")
+
+# Função para enviar a leitura de tarot após o pagamento
+async def send_tarot_reading(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    selected_cards = choose_cards(tarot_deck, 3)  # Exemplo: 3 cartas
+    interpretation = interpret_cards(selected_cards, tarot_deck)
+    chat_id = update.message.chat_id
+    await context.bot.send_message(chat_id=chat_id, text=interpretation, parse_mode=ParseMode.HTML)
+
+# Configuração do bot
+application = Application.builder().token('7231958483:AAHoHfowtwVudXsc15JEfNZHcgh6PnJnAxI').build()
+
+# Adicionar handlers para os comandos
+application.add_handler(CommandHandler('assinar', start_subscription))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_coupon))
+application.add_handler(CallbackQueryHandler(process_plan_selection))
+
+# Inicie o bot
+if __name__ == "__main__":
+    application.run_polling()
